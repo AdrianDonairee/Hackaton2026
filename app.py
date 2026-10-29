@@ -7,8 +7,10 @@ from typing import Any, Dict, Tuple
 import pandas as pd
 import streamlit as st
 from data_processing import (
+    LEAGUE_NAMES,
     compute_rolling_features,
     download_kaggle_dataset,
+    get_latest_team_stats,
     load_and_clean_data,
 )
 from main import DEFAULT_ARTIFACTS_PATH, run_pipeline
@@ -25,42 +27,23 @@ st.set_page_config(
 @st.cache_resource
 def get_trained_artifacts_and_data() -> Tuple[Dict[str, Any], pd.DataFrame]:
     """
-    Descarga/localiza el dataset de KaggleHub y carga los modelos serializados.
-    Si los modelos aún no existen en disco, ejecuta el pipeline inicial.
+    Descarga/localiza el dataset de KaggleHub con todas las ligas y carga los modelos
+    serializados. Si los modelos aún no existen en disco, ejecuta el pipeline inicial.
     """
     csv_path = download_kaggle_dataset()
 
     if not DEFAULT_ARTIFACTS_PATH.exists():
-        run_pipeline(data_path=csv_path, show_plots=False)
+        run_pipeline(
+            data_path=csv_path,
+            division=None,
+            show_plots=False,
+            interactive=False,
+        )
 
     artifacts = load_artifacts(DEFAULT_ARTIFACTS_PATH)
-    raw_df = load_and_clean_data(filepath=csv_path)
+    raw_df = load_and_clean_data(filepath=csv_path, division=None)
     processed_df, _ = compute_rolling_features(raw_df, window=5)
     return artifacts, processed_df
-
-
-def get_latest_team_stats(df: pd.DataFrame, team: str) -> Dict[str, float]:
-    """
-    Obtiene las últimas estadísticas móviles registradas de un equipo en el dataset.
-    """
-    team_rows = df[(df["HomeTeam"] == team) | (df["AwayTeam"] == team)]
-    if team_rows.empty:
-        return {"GF": 1.4, "GA": 1.2, "Pts": 1.5, "SOT": 4.0}
-
-    last_row = team_rows.iloc[-1]
-    if last_row["HomeTeam"] == team:
-        return {
-            "GF": float(last_row["Home_Roll_GF"]),
-            "GA": float(last_row["Home_Roll_GA"]),
-            "Pts": float(last_row["Home_Roll_Pts"]),
-            "SOT": float(last_row.get("Home_Roll_SOT", 4.0)),
-        }
-    return {
-        "GF": float(last_row["Away_Roll_GF"]),
-        "GA": float(last_row["Away_Roll_GA"]),
-        "Pts": float(last_row["Away_Roll_Pts"]),
-        "SOT": float(last_row.get("Away_Roll_SOT", 4.0)),
-    }
 
 
 def main() -> None:
@@ -76,14 +59,34 @@ def main() -> None:
     scaler = artifacts["scaler"]
     feature_cols = artifacts["feature_cols"]
 
-    teams = sorted(processed_df["HomeTeam"].unique().tolist())
-
-    st.sidebar.header("Configuración del Modelo")
+    st.sidebar.header("Configuración")
     selected_model_name = st.sidebar.selectbox(
         "Seleccionar Clasificador",
         options=list(models.keys()),
     )
     selected_model = models[selected_model_name]
+
+    # Filtro opcional de liga para encontrar equipos más rápido (LaLiga, Premier, Serie A, etc.)
+    if "Division" in processed_df.columns:
+        available_divs = sorted(processed_df["Division"].dropna().unique().tolist())
+        div_options = ["ALL"] + available_divs
+        selected_div = st.sidebar.selectbox(
+            "Filtrar por Liga / División",
+            options=div_options,
+            format_func=lambda code: (
+                "Todas las ligas"
+                if code == "ALL"
+                else f"{LEAGUE_NAMES.get(code, 'Liga')} ({code})"
+            ),
+        )
+        if selected_div == "ALL":
+            filtered_df = processed_df
+        else:
+            filtered_df = processed_df[processed_df["Division"] == selected_div]
+    else:
+        filtered_df = processed_df
+
+    teams = sorted(filtered_df["HomeTeam"].unique().tolist())
 
     input_mode = st.sidebar.radio(
         "Modo de ingreso de datos",

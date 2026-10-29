@@ -4,7 +4,7 @@ para el dataset de fútbol (Football-Data.co.uk / Club Football Match Data 2000-
 """
 
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import kagglehub
 import numpy as np
 import pandas as pd
@@ -27,6 +27,27 @@ COLUMN_RENAME_MAP = {
     "OddHome": "B365H",
     "OddDraw": "B365D",
     "OddAway": "B365A",
+}
+
+# Nombres descriptivos de las principales ligas del dataset
+LEAGUE_NAMES: Dict[str, str] = {
+    "SP1": "LaLiga (España)",
+    "E0": "Premier League (Inglaterra)",
+    "I1": "Serie A (Italia)",
+    "D1": "Bundesliga (Alemania)",
+    "F1": "Ligue 1 (Francia)",
+    "ARG": "Primera División (Argentina)",
+    "BRA": "Brasileirão (Brasil)",
+    "P1": "Primeira Liga (Portugal)",
+    "N1": "Eredivisie (Países Bajos)",
+    "B1": "Pro League (Bélgica)",
+    "T1": "Süper Lig (Turquía)",
+    "SC0": "Premiership (Escocia)",
+    "E1": "Championship (Inglaterra 2ª)",
+    "SP2": "LaLiga Hypermotion (España 2ª)",
+    "I2": "Serie B (Italia 2ª)",
+    "D2": "2. Bundesliga (Alemania 2ª)",
+    "F2": "Ligue 2 (Francia 2ª)",
 }
 
 REQUIRED_COLUMNS = ["Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "FTR"]
@@ -58,7 +79,6 @@ def download_kaggle_dataset(
     if matches_csv.exists():
         return matches_csv
 
-    # Fallback: buscar cualquier archivo CSV dentro de la carpeta descargada
     csv_files = list(dataset_dir.glob("*.csv"))
     if not csv_files:
         raise FileNotFoundError(f"No se encontraron archivos CSV en {dataset_dir}")
@@ -67,8 +87,8 @@ def download_kaggle_dataset(
 
 def load_and_clean_data(
     filepath: Optional[str | Path] = None,
-    division: Optional[str] = "E0",
-    min_year: Optional[int] = 2015,
+    division: Optional[str] = None,
+    min_year: Optional[int] = 2020,
 ) -> pd.DataFrame:
     """
     Carga el dataset (descargándolo de Kaggle si no se indica `filepath`),
@@ -77,9 +97,9 @@ def load_and_clean_data(
 
     Args:
         filepath: Ruta opcional al CSV local. Si es None, descarga desde KaggleHub.
-        division: Código de liga para filtrar (ej. 'E0' Premier League, 'SP1' LaLiga,
-                  o None para conservar todas las ligas).
-        min_year: Año mínimo a filtrar para entrenar con fútbol moderno (None para todo).
+        division: Código de liga opcional para filtrar (ej. 'SP1' LaLiga, 'E0' Premier,
+                  o None por defecto para incluir todas las ligas del dataset).
+        min_year: Año mínimo a filtrar para entrenar con temporadas recientes (default: 2020).
 
     Returns:
         DataFrame limpio y ordenado por fecha de forma ascendente.
@@ -92,7 +112,7 @@ def load_and_clean_data(
     # Normalizar nombres de columnas si provienen de "club-football-match-data-2000-2025"
     df = df.rename(columns=COLUMN_RENAME_MAP)
 
-    # Filtrar por liga/división si existe la columna y se especificó un filtro
+    # Filtrar por liga/división solo si el usuario especificó una en particular
     if division is not None and "Division" in df.columns:
         df_div = df[df["Division"] == division]
         if not df_div.empty:
@@ -251,3 +271,34 @@ def compute_rolling_features(
     # Eliminar primeros partidos de cada equipo donde aún no existen estadísticas previas
     df = df.dropna(subset=feature_cols).reset_index(drop=True)
     return df, feature_cols
+
+
+def get_latest_team_stats(df: pd.DataFrame, team: str) -> Dict[str, float]:
+    """
+    Obtiene las últimas estadísticas móviles y cuotas registradas de un equipo en el dataset.
+
+    Args:
+        df: DataFrame procesado con columnas `Home_Roll_*` y `Away_Roll_*`.
+        team: Nombre del equipo.
+
+    Returns:
+        Diccionario con claves GF, GA, Pts, SOT y cuotas de referencia.
+    """
+    team_rows = df[(df["HomeTeam"] == team) | (df["AwayTeam"] == team)]
+    if team_rows.empty:
+        return {"GF": 1.4, "GA": 1.2, "Pts": 1.5, "SOT": 4.0}
+
+    last_row = team_rows.iloc[-1]
+    if last_row["HomeTeam"] == team:
+        return {
+            "GF": round(float(last_row["Home_Roll_GF"]), 2),
+            "GA": round(float(last_row["Home_Roll_GA"]), 2),
+            "Pts": round(float(last_row["Home_Roll_Pts"]), 2),
+            "SOT": round(float(last_row.get("Home_Roll_SOT", 4.0)), 2),
+        }
+    return {
+        "GF": round(float(last_row["Away_Roll_GF"]), 2),
+        "GA": round(float(last_row["Away_Roll_GA"]), 2),
+        "Pts": round(float(last_row["Away_Roll_Pts"]), 2),
+        "SOT": round(float(last_row.get("Away_Roll_SOT", 4.0)), 2),
+    }
